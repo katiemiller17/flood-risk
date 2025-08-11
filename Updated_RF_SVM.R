@@ -17,8 +17,8 @@ dts <- rast("Buncombe_DistanceToStream_Reproject.tif")
 twi <- rast("Buncombe_TWI_Reproject.tif")
 ndvi <- rast("NDVI_Sep_2024 1.tif")
 svi <- rast("Buncombe_SocialVuln_Reproject.tif")
-buffer <- rast("Buffer_Raster.tif")
-flood <- rast("FloodHazard_Raster.tif")
+buffer <- rast("buffer.tif")
+flood <- rast("flood.tif")
 
 # reproject NLCD
 nlcd <- project(nlcd, ndvi)
@@ -29,7 +29,7 @@ crs(nlcd) == crs(ndvi)
 st_crs(flood) == st_crs(twi)
 
 # list of rasters
-rasters <- list(nlcd, dts, twi, ndvi, svi, buffer, flood)
+rasters <- list(nlcd, dts, twi, ndvi, svi)
 
 # initialize common extent with the extent of the first raster
 common_extent <- ext(ndvi)
@@ -39,9 +39,9 @@ for (i in 2:length(rasters)) {
   common_extent <- terra::intersect(common_extent, ext(rasters[[i]]))
 }
 
-for (raster in rasters){
-  cropped_raster <- crop(raster, common_extent)
-}
+# for (raster in rasters){
+#   cropped_raster <- crop(raster, common_extent)
+# }
 
 # manually crop
 nlcd_cropped <- crop(nlcd, common_extent)
@@ -65,8 +65,111 @@ raster_stack <- c(nlcd_resampled, dts_resampled, twi_resampled, ndvi_cropped,
                   svi_resampled, buffer_resampled, flood_resampled)
 names(raster_stack) <- c("NLCD", "DTS", "TWI", "NDVI", "SVI", "Buffer", "Flood")
 
+# create separate raster stack for PCA (don't need buffer or flood risk)
+PCA_raster_stack <- c(nlcd_resampled, dts_resampled, twi_resampled, ndvi_cropped, svi_resampled)
+names(PCA_raster_stack) <- c("NLCD", "DTS", "TWI", "NDVI", "SVI")
+
+
 print(raster_stack)
 plot(raster_stack, stretch = "hist")
+
+
+spca <- rasterPCA(PCA_raster_stack, spca = T)
+
+loadings <- spca$model$loadings
+loadings[, 1:5]
+print(loadings)
+plot(spca$map)
+summary(spca$model)
+
+PCA_rasters <- spca$map
+names(PCA_rasters)
+
+pc1 <- PCA_rasters[[1]]
+pc2 <- PCA_rasters[[2]]
+pc3 <- PCA_rasters[[3]]
+pc4 <- PCA_rasters[[4]]
+pc5 <- PCA_rasters[[5]]
+
+PC_rf_raster_stack <- c(pc1,pc2,pc3,pc4,pc5,buffer_resampled, flood_resampled)
+
+# turn raster stack into a data frame
+PCA_flood_df <- as.data.frame(PC_rf_raster_stack, xy = TRUE, na.rm = TRUE)
+names(PCA_flood_df) <- c("x", "y", "PC1", "PC2",
+                     "PC3", "PC4", "PC5", "Buffer", "Flood")
+PCA_flood_df$Flood <- as.factor(flood_df$Flood)
+
+
+PCA_yes_flood <- PCA_flood_df%>%filter(Flood == 1)
+PCA_no_flood <- PCA_flood_df%>%filter(Flood == 0)
+
+set.seed(123)
+PCA_no_flood_sample <- no_flood%>%sample_n(nrow(PCA_yes_flood))
+PCA_balanced_data <- bind_rows(PCA_yes_flood, PCA_no_flood_sample)
+
+
+# random forest
+
+#remove coordinate columns
+PCA_predictors <- names(PCA_balanced_data)[!names(PCA_balanced_data)
+                                   %in% c("x", "y", "balanced_data", "Flood")]
+PCA_rf_test <- as.formula(paste("Flood~", paste(PCA_predictors, collapse = "+")))
+
+#subset sample of data
+# set.seed(123)
+sample_size <- floor(0.7 * nrow(PCA_balanced_data))
+train_indices <- sample(seq_len(nrow(PCA_balanced_data)),
+                        size = sample_size, replace = FALSE)
+
+PCA_train_data <- PCA_balanced_data[train_indices, ]
+PCA_test_data <- balanced_data[-train_indices, ]
+
+#data are too big, so need to sample
+PCA_sample_rows <- sample(nrow(PCA_train_data), 10000)
+PCA_train_sample <- PCA_train_data[PCA_sample_rows, ]
+
+#use this if the testing is taking too long
+PCA_sample_rows <- sample(nrow(PCA_test_data), 10000)
+PCA_test_sample <- PCA_test_data[PCA_sample_rows, ]
+
+#train
+PCA_rf_model <- randomForest(PCA_rf_test, data = PCA_train_sample,
+                         ntree = 500, importance = TRUE)
+
+print(PCA_rf_model)
+
+# predict classification
+PCA_rf_predict <- predict(PCA_rf_model, newdata = PCA_test_sample)
+PCA_rf_pred_raster <- predict(PCA_raster_stack, PCA_rf_model, type = "response")
+plot(PCA_rf_pred_raster, main = "RF Predicted Flood Risk Binary")
+
+# writeRaster(rf_pred_raster,
+#             filename = "rf_flood_risk_binary.tif",
+#             datatype = "INT1U", overwrite = TRUE)
+
+
+# predict probabilities
+rf_pred_prob <- predict(raster_stack, rf_model, type = "prob")
+
+names(rf_pred_prob)
+rf_pred_probability <- rf_pred_prob[[2]]
+
+reclass_m <- matrix(c(
+  0.0, 0.3, 1, # low
+  0.3, 0.6, 2, # medium
+  0.6, 1.0, 3 # high
+), ncol = 3, byrow = TRUE)
+
+flood_risk_classification <- classify(rf_pred_probability, reclass_m)
+plot(flood_risk_classification)
+
+writeRaster(flood_risk_classification,
+            filename = "rf_flood_risk_classification.tif",
+            datatype = "INT1U", overwrite = TRUE)
+
+##
+# Random Forest
+##
 
 # load in county shapefile to crop rasters
 buncombe_county <- st_read("BucombeCounty.shp")
@@ -96,7 +199,7 @@ predictors <- names(balanced_data)[!names(balanced_data)
 rf_test <- as.formula(paste("Flood~", paste(predictors, collapse = "+")))
 
 #subset sample of data
-set.seed(123)
+# set.seed(123)
 sample_size <- floor(0.7 * nrow(balanced_data))
 train_indices <- sample(seq_len(nrow(balanced_data)),
                         size = sample_size, replace = FALSE)
