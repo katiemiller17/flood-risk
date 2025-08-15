@@ -468,3 +468,11 @@ plot(SVM_Classifacation)
 heatmap_raster <- (PCA_Classifacation + RF_Classifacation + SVM_Classifacation) /3
 plot(heatmap_raster, margin = FALSE, main = "Model Consensus")
 
+
+writeRaster(heatmap_raster,
+            filename = "3Model_Heatmap.tif",
+            datatype = "INT1U", overwrite = TRUE)
+
+writeRaster(flood_risk_classification,
+            filename = "rf_flood_risk_classification.tif",
+            datatype = "INT1U", overwrite = TRUE)
