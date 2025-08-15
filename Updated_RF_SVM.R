@@ -152,76 +152,6 @@ writeRaster(flood_risk_classification,
 #use this confusionMatrix(rf_predict, test_data$Flood)
 varImpPlot(rf_model)
 
-#get predicted probabilities
-# flood_df$rf_prob <- predict(rf_model, flood_df, type = "prob")[, "1"]
-# test_sample$rf_prob <- predict(rf_model, test_sample, type = "prob")[, "1"]
-# library(ggplot2)
-# 
-# ggplot(test_sample, aes(x=DTS, y = rf_prob))+
-#   geom_point(alpha=0.2, color = "darkblue")+
-#   geom_smooth(se=TRUE, color="lightpink")+
-#   theme_minimal()
-# 
-# ## RF model diagnostics 
-# 
-# # turn flood risk variable into a factor
-# balanced_data$Flood <- as.factor(balanced_data$Flood)
-# train_sample$Flood <- as.factor(train_sample$Flood)
-# test_sample$Flood <- as.factor(test_sample$Flood)
-# 
-# # use previously defined training data samples
-# set.seed(123)
-# # define fractions of training data to use
-# train_fractions <- seq(0.1, 1.9, by = 0.1)
-# # create empty vectors to hold accuracy values
-# train_accuracy <- numeric(length(train_fractions))
-# test_accuracy <- numeric(length(train_fractions))
-# 
-# # loop through training set sizes
-# for (i in seq_along(train_fractions)) {
-#   fractions <- train_fractions[i]
-#   n_available <- nrow(train_sample)
-#   n_sub <- min(n_available, floor(fractions * n_available))
-#   # Skip if n_sub is too small
-#   if (n_sub < 10) next
-#   sub_idx <- sample(seq_len(n_available), size = n_sub)
-#   train_sub <- train_sample[sub_idx, ]
-#   # Ensure factor
-#   train_sub$Flood <- as.factor(train_sub$Flood)
-#   test_sample$Flood <- as.factor(test_sample$Flood)
-#   rf_model <- randomForest(Flood ~ ., data = train_sub, ntree = 500)
-#   train_pred <- predict(rf_model, train_sub)
-#   test_pred <- predict(rf_model, test_sample)
-#   train_accuracy[i] <- mean(train_pred == train_sub$Flood)
-#   test_accuracy[i] <- mean(test_pred == test_sample$Flood)
-# }
-# 
-# # combine and plot
-# learning_curve <- data.frame(
-#   train_size = floor(train_fractions*nrow(train_sample)),
-#   train_acc = train_accuracy,
-#   test_acc = test_accuracy
-# )
-# 
-# ggplot(learning_curve, aes(x=train_size))+
-#   geom_line(aes(y=train_acc, color = "Train"), linewidth=1.2)+
-#   geom_line(aes(y=test_acc, color = "Test"), linewidth=1.2)+
-#   scale_color_manual(name="Dataset", values = c("Train" = "steelblue3", "Test" = "sienna2"))+
-#   labs(title = "Learning curve RF", x="Training Set Size", y = "Accuracy")+
-#   theme_minimal()
-# 
-# # ROC Curve
-# library(pROC)
-# library(PRROC)
-# 
-# rf_model <- randomForest(Flood~ ., data=train_sample, ntree = 500)
-# rf_probability <- predict(rf_model, test_sample, type = "prob")
-# flood_probability <- rf_probability[, "1"]
-# flood_true <- as.numeric(as.character(test_sample$Flood))
-# 
-# roc_curve <- roc(flood_true, flood_probability)
-# plot(roc_curve, col="darkblue", main = "ROC Curve", print.auc=TRUE)
-
 # -------------------------------------------------------------------------
 # svm model
 svm_model <- svm(rf_test, data = train_sample,
@@ -258,48 +188,31 @@ cat("Tuned SVM Accuracy:", svm_best_accuracy, "\n")
 
 # -----------------------------------------
 
-
-
 # Train SVM with probability output enabled
-
 svm_model <- svm(rf_test, data = train_sample,
-                 
                  kernel = "radial", cost = 10, gamma = 0.1,
-                 
                  probability = TRUE)
 
 # Predict on test set with probabilities
-
 svm_predict <- predict(svm_model, newdata = test_sample, probability = TRUE)
-
 svm_probs <- attr(svm_predict, "probabilities")[, "1"]
 
 # Confusion matrix
-
 svm_actual <- test_sample$Flood
-
 svm_predicted <- factor(svm_predict, levels = levels(svm_actual))
-
 svm_conf_matrix <- table(Predicted = svm_predicted, Actual = svm_actual)
-
 print(svm_conf_matrix)
 
 # Accuracy
-
 svm_accuracy <- mean(svm_predicted == svm_actual)
-
 cat("SVM Accuracy:", svm_accuracy, "\n")
 
 # ROC Curve
-
 flood_true <- as.numeric(as.character(test_sample$Flood))
-
 roc_curve_svm <- roc(flood_true, svm_probs)
-
 plot(roc_curve_svm, col = "darkred", main = "SVM ROC Curve", print.auc = TRUE)
 
 # Predict raster layer using SVM (probability)
-
 svm_pred_stack <- predict(raster_stack, svm_model, type = "response", na.rm=TRUE)
 
 #Custom function to return probability of flood (class 1)
@@ -312,31 +225,19 @@ svm_prob_fun <- function(model, data) {
 svm_pred_probability <- predict(raster_stack, svm_model, fun = svm_prob_fun, na.rm = TRUE)
 
 # Reclassify probability raster into risk categories
-
 reclass_m <- matrix(c(
-  
   0.0, 0.3, 1,
-  
   0.3, 0.6, 2,
-  
   0.6, 1.0, 3
-  
 ), ncol = 3, byrow = TRUE)
-
 svm_risk_classification <- classify(svm_pred_probability, reclass_m)
 
 # Plot maps
-
 plot(svm_pred_stack, main = "SVM Predicted Flood Risk")
-
 plot(svm_pred_probability, main = "SVM Predicted Flood Probability")
-
 plot(svm_risk_classification, main = "SVM Flood Risk Classification")
 
 # Save classified raster 
-
 writeRaster(svm_pred_stack,
-            
             filename = "svm_flood_risk_binary.tif",
-            
             datatype = "INT1U", overwrite = TRUE)
