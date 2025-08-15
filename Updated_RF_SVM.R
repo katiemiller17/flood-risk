@@ -29,7 +29,7 @@ crs(nlcd) == crs(ndvi)
 st_crs(flood) == st_crs(twi)
 
 # list of rasters
-rasters <- list(nlcd, dts, twi, ndvi, svi)
+rasters <- list(nlcd, dts, twi, ndvi, svi, buffer, flood)
 
 # initialize common extent with the extent of the first raster
 common_extent <- ext(ndvi)
@@ -91,57 +91,60 @@ pc3 <- PCA_rasters[[3]]
 pc4 <- PCA_rasters[[4]]
 pc5 <- PCA_rasters[[5]]
 
+plot(pc1)
+
 PC_rf_raster_stack <- c(pc1,pc2,pc3,pc4,pc5,buffer_resampled, flood_resampled)
+names(PC_rf_raster_stack) <- c("pc1", "pc2",
+                               "pc3", "pc4", "pc5", "Buffer", "Flood")
 
 # turn raster stack into a data frame
-PCA_flood_df <- as.data.frame(PC_rf_raster_stack, xy = TRUE, na.rm = TRUE)
-names(PCA_flood_df) <- c("x", "y", "PC1", "PC2",
-                     "PC3", "PC4", "PC5", "Buffer", "Flood")
-PCA_flood_df$Flood <- as.factor(flood_df$Flood)
+flood_df <- as.data.frame(PC_rf_raster_stack, xy = TRUE, na.rm = TRUE)
+names(flood_df) <- c("x", "y", "pc1", "pc2",
+                     "pc3", "pc4", "pc5", "Buffer", "Flood")
+flood_df$Flood <- as.factor(flood_df$Flood)
 
-
-PCA_yes_flood <- PCA_flood_df%>%filter(Flood == 1)
-PCA_no_flood <- PCA_flood_df%>%filter(Flood == 0)
+yes_flood <- flood_df%>%filter(Flood == 1)
+no_flood <- flood_df%>%filter(Flood == 0)
 
 set.seed(123)
-PCA_no_flood_sample <- no_flood%>%sample_n(nrow(PCA_yes_flood))
-PCA_balanced_data <- bind_rows(PCA_yes_flood, PCA_no_flood_sample)
+no_flood_sample <- no_flood%>%sample_n(nrow(yes_flood))
+balanced_data <- bind_rows(yes_flood, no_flood_sample)
 
 
-# random forest
+# PCA random forest
 
 #remove coordinate columns
-PCA_predictors <- names(PCA_balanced_data)[!names(PCA_balanced_data)
+predictors <- names(balanced_data)[!names(balanced_data)
                                    %in% c("x", "y", "balanced_data", "Flood")]
-PCA_rf_test <- as.formula(paste("Flood~", paste(PCA_predictors, collapse = "+")))
+rf_test <- as.formula(paste("Flood~", paste(predictors, collapse = "+")))
 
 #subset sample of data
 # set.seed(123)
-sample_size <- floor(0.7 * nrow(PCA_balanced_data))
-train_indices <- sample(seq_len(nrow(PCA_balanced_data)),
+sample_size <- floor(0.7 * nrow(balanced_data))
+train_indices <- sample(seq_len(nrow(balanced_data)),
                         size = sample_size, replace = FALSE)
 
-PCA_train_data <- PCA_balanced_data[train_indices, ]
-PCA_test_data <- balanced_data[-train_indices, ]
+train_data <- balanced_data[train_indices, ]
+test_data <- balanced_data[-train_indices, ]
 
 #data are too big, so need to sample
-PCA_sample_rows <- sample(nrow(PCA_train_data), 10000)
-PCA_train_sample <- PCA_train_data[PCA_sample_rows, ]
+sample_rows <- sample(nrow(train_data), 10000)
+train_sample <- train_data[sample_rows, ]
 
 #use this if the testing is taking too long
-PCA_sample_rows <- sample(nrow(PCA_test_data), 10000)
-PCA_test_sample <- PCA_test_data[PCA_sample_rows, ]
+sample_rows <- sample(nrow(test_data), 10000)
+test_sample <- test_data[sample_rows, ]
 
 #train
-PCA_rf_model <- randomForest(PCA_rf_test, data = PCA_train_sample,
+rf_model <- randomForest(rf_test, data = train_sample,
                          ntree = 500, importance = TRUE)
 
-print(PCA_rf_model)
+print(rf_model)
 
 # predict classification
-PCA_rf_predict <- predict(PCA_rf_model, newdata = PCA_test_sample)
-PCA_rf_pred_raster <- predict(PCA_raster_stack, PCA_rf_model, type = "response")
-plot(PCA_rf_pred_raster, main = "RF Predicted Flood Risk Binary")
+rf_predict <- predict(rf_model, newdata = test_sample)
+rf_pred_raster <- predict(PC_rf_raster_stack, rf_model, type = "response")
+plot(rf_pred_raster, main = "RF Predicted Flood Risk Binary")
 
 # writeRaster(rf_pred_raster,
 #             filename = "rf_flood_risk_binary.tif",
@@ -149,7 +152,7 @@ plot(PCA_rf_pred_raster, main = "RF Predicted Flood Risk Binary")
 
 
 # predict probabilities
-rf_pred_prob <- predict(raster_stack, rf_model, type = "prob")
+rf_pred_prob <- predict(PC_rf_raster_stack, rf_model, type = "prob")
 
 names(rf_pred_prob)
 rf_pred_probability <- rf_pred_prob[[2]]
@@ -164,8 +167,14 @@ flood_risk_classification <- classify(rf_pred_probability, reclass_m)
 plot(flood_risk_classification)
 
 writeRaster(flood_risk_classification,
-            filename = "rf_flood_risk_classification.tif",
+            filename = "PCA_flood_risk_classification.tif",
             datatype = "INT1U", overwrite = TRUE)
+
+writeRaster(rf_pred_raster,
+            filename = "PCA_flood_risk_binary.tif",
+            datatype = "INT1U", overwrite = TRUE)
+
+
 
 ##
 # Random Forest
@@ -443,3 +452,19 @@ writeRaster(svm_pred_stack,
             filename = "svm_flood_risk_binary.tif",
             
             datatype = "INT1U", overwrite = TRUE)
+
+
+## Heatmap creation
+
+PCA_Classifacation <- flood_risk_classification
+# RF_Classifacation <- rast("rf_flood_risk_classification.tif")
+RF_Classifacation <- flood_risk_classification
+# SVM_Classifacation <- rast("svm_flood_risk_classification.tif")
+SVM_Classifacation <- svm_risk_classification
+plot(RF_Classifacation)
+plot(SVM_Classifacation)
+
+# Creating heatmaps
+heatmap_raster <- (PCA_Classifacation + RF_Classifacation + SVM_Classifacation) /3
+plot(heatmap_raster, margin = FALSE, main = "Model Consensus")
+
